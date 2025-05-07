@@ -10,7 +10,6 @@ from tempfile import NamedTemporaryFile
 
 app = FastAPI()
 
-# Template base para gerar testes em Robot Framework com RequestsLibrary
 robot_template = Template("""*** Settings ***
 Library    RequestsLibrary
 Library    Collections
@@ -32,6 +31,32 @@ ${BASE_URL}    {{ base_url }}
 
 {% endfor %}""")
 
+def get_dummy_value(prop_type):
+    if prop_type == "string":
+        return "example"
+    elif prop_type == "integer":
+        return 123
+    elif prop_type == "boolean":
+        return True
+    elif prop_type == "array":
+        return ["item1", "item2"]
+    elif prop_type == "object":
+        return {"key": "value"}
+    else:
+        return "<value>"
+
+def extract_body(schema: Dict) -> Dict:
+    if not schema:
+        return {}
+
+    properties = schema.get("properties", {})
+    body = {}
+
+    for k, v in properties.items():
+        prop_type = v.get("type", "string")
+        body[k] = get_dummy_value(prop_type)
+
+    return body
 
 def parse_swagger(swagger: Dict):
     base_url = swagger.get("servers", [{"url": "http://localhost"}])[0]["url"]
@@ -41,21 +66,25 @@ def parse_swagger(swagger: Dict):
     for path, methods in paths.items():
         for method, config in methods.items():
             body = None
-            # Tenta pegar o exemplo do body, se existir
             if "requestBody" in config:
                 content = config["requestBody"].get("content", {})
                 json_data = content.get("application/json", {})
                 body = json_data.get("example")
+
                 if not body:
-                    # se não tiver example, tenta pegar schema com propriedades dummy
                     schema = json_data.get("schema", {})
-                    props = schema.get("properties", {})
-                    body = {k: f"<{k}>" for k in props.keys()} if props else {}
+                    body = extract_body(schema)
+
+            full_path = path
+            for param in config.get("parameters", []):
+                if param.get("in") == "path":
+                    name = param["name"]
+                    full_path = full_path.replace("{" + name + "}", "${" + name.upper() + "}")
 
             ep = {
                 "method": method,
                 "path": path,
-                "full_path": path.replace("{", "${").replace("}", "}"),
+                "full_path": full_path,
                 "body": body or {}
             }
             endpoints.append(ep)
@@ -79,4 +108,3 @@ async def generate_robot(swagger_file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
