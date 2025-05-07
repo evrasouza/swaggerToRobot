@@ -13,6 +13,7 @@ app = FastAPI()
 # Template base para gerar testes em Robot Framework com RequestsLibrary
 robot_template = Template("""*** Settings ***
 Library    RequestsLibrary
+Library    Collections
 
 *** Variables ***
 ${BASE_URL}    {{ base_url }}
@@ -21,10 +22,16 @@ ${BASE_URL}    {{ base_url }}
 {% for ep in endpoints %}{{ ep.method|upper }} {{ ep.path }}
     [Tags]    auto
     Create Session    api    ${BASE_URL}
-    {{ ep.method|title }}    api    {{ ep.full_path }}{% if ep.body %}    data={{ ep.body|tojson }}{% endif %}
+{% if ep.body %}
+    &{body}=    Create Dictionary    {% for k, v in ep.body.items() %}{{ k }}={{ v }}{% if not loop.last %}    {% endif %}{% endfor %}
+    {{ ep.method|title }}    api    {{ ep.full_path }}    json=${body}
+{% else %}
+    {{ ep.method|title }}    api    {{ ep.full_path }}
+{% endif %}
     Status Should Be    200
 
 {% endfor %}""")
+
 
 def parse_swagger(swagger: Dict):
     base_url = swagger.get("servers", [{"url": "http://localhost"}])[0]["url"]
@@ -33,11 +40,23 @@ def parse_swagger(swagger: Dict):
 
     for path, methods in paths.items():
         for method, config in methods.items():
+            body = None
+            # Tenta pegar o exemplo do body, se existir
+            if "requestBody" in config:
+                content = config["requestBody"].get("content", {})
+                json_data = content.get("application/json", {})
+                body = json_data.get("example")
+                if not body:
+                    # se não tiver example, tenta pegar schema com propriedades dummy
+                    schema = json_data.get("schema", {})
+                    props = schema.get("properties", {})
+                    body = {k: f"<{k}>" for k in props.keys()} if props else {}
+
             ep = {
                 "method": method,
                 "path": path,
                 "full_path": path.replace("{", "${").replace("}", "}"),
-                "body": config.get("requestBody", {}).get("content", {}).get("application/json", {}).get("example", {})
+                "body": body or {}
             }
             endpoints.append(ep)
 
